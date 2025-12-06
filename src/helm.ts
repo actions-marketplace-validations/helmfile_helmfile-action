@@ -1,5 +1,5 @@
 import * as core from '@actions/core';
-import {exec} from '@actions/exec';
+import {exec, ExecOptions, getExecOutput} from '@actions/exec';
 import {
   arch,
   cacheDir,
@@ -9,6 +9,24 @@ import {
   resloveCached,
   resolveLatest
 } from './helpers';
+
+// Get the Helm major version (e.g., 3 or 4)
+async function getHelmMajorVersion(): Promise<number> {
+  try {
+    const output = await getExecOutput('helm', ['version', '--short'], {
+      silent: true
+    });
+    // Output format is like "v3.15.0+gc..." or "v4.0.0+g..."
+    const versionMatch = output.stdout.match(/^v?(\d+)\./);
+    if (versionMatch) {
+      return parseInt(versionMatch[1], 10);
+    }
+  } catch (error) {
+    core.warning(`Failed to get Helm version: ${error}`);
+  }
+  // Default to version 3 if we can't determine
+  return 3;
+}
 
 export async function installHelm(version: string): Promise<void> {
   if (version === 'latest') {
@@ -37,12 +55,57 @@ export async function installHelm(version: string): Promise<void> {
 }
 
 export async function installHelmPlugins(plugins: string[]): Promise<void> {
+  // Check Helm version to determine if --verify=false is needed (v4+)
+  const helmMajorVersion = await getHelmMajorVersion();
+  const verifyFlag = helmMajorVersion >= 4 ? '--verify=false ' : '';
+
   for (const plugin of plugins) {
-    try {
-      await exec(`helm plugin install ${plugin.trim()}`);
-      await exec('helm plugin list');
-    } catch (error) {
-      if (error instanceof Error) core.warning(error.message);
+    const pluginSpec = plugin.trim();
+    let pluginUrl = pluginSpec;
+    let version = '';
+
+    // Parse plugin specification for version (format: url@version)
+    const atIndex = pluginSpec.lastIndexOf('@');
+    if (atIndex > 0) {
+      const potentialVersion = pluginSpec.substring(atIndex + 1);
+      // Check if the part after @ looks like a version (starts with v or is numeric)
+      if (potentialVersion.match(/^v?\d+/)) {
+        pluginUrl = pluginSpec.substring(0, atIndex);
+        version = potentialVersion;
+      }
+    }
+
+    let pluginStderr = '';
+
+    const options: ExecOptions = {};
+    options.ignoreReturnCode = true;
+    options.listeners = {
+      stderr: (data: Buffer) => {
+        pluginStderr += data.toString();
+      }
+    };
+
+    // Build the helm plugin install command (add --verify=false only for Helm v4+)
+    let installCommand = `helm plugin install ${verifyFlag}${pluginUrl}`;
+    if (version) {
+      installCommand += ` --version ${version}`;
+    }
+
+    const eCode = await exec(installCommand, [], options);
+
+    if (eCode == 0) {
+      const versionInfo = version ? ` (version ${version})` : '';
+      core.info(`Plugin ${pluginUrl}${versionInfo} installed successfully`);
+      continue;
+    }
+
+    if (eCode == 1 && pluginStderr.includes('plugin already exists')) {
+      const versionInfo = version ? ` (version ${version})` : '';
+      core.info(`Plugin ${pluginUrl}${versionInfo} already exists`);
+    } else {
+      throw new Error(pluginStderr);
     }
   }
+
+  await exec('helm plugin list');
 }

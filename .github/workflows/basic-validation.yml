@@ -20,15 +20,30 @@ jobs:
     name: Basic validation
     uses: actions/reusable-workflows/.github/workflows/basic-validation.yml@main
 
-  test-action: # make sure the action works on a clean machine
+  test-action-plugins: # make sure the action works on a clean machine
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v6
       - uses: ./
         with:
+          helm-plugins: >
+            https://github.com/databus23/helm-diff,
+            https://github.com/jkroepke/helm-secrets
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  test-action-auto-init: # make sure the action works on a clean machine
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./
+        with:
+          helmfile-auto-init: 'true'
           helm-plugins: >
             https://github.com/databus23/helm-diff,
             https://github.com/jkroepke/helm-secrets
